@@ -30,8 +30,9 @@ $ news-summarizer "solid state batteries" -n 3
 * One summary request per article. A failure on one article is shown next to it and the others still run.
 * A refused API key stops the run after the first request instead of repeating the same failure.
 * The NewsAPI key goes in a request header, never in the URL, and no error message or log line contains a key.
-* Article titles and model output are untrusted text: control characters (terminal escape sequences) are removed
-  before they are printed.
+* Article titles, model output and error messages from remote services are untrusted text: every Unicode
+  control, format and unassigned character (escape sequences, C1 controls, bidi overrides, invisible "tag"
+  characters) is removed before it is printed, and escaped as `\uXXXX` in `--json` output.
 
 Exit codes: `0` all summarized, `1` some articles could not be summarized, `2` missing or invalid configuration
 or usage, `3` NewsAPI or OpenAI refused the whole run.
@@ -99,7 +100,7 @@ uv run pytest -q --cov
 uv run ruff check . && uv run ruff format --check .
 ```
 
-88 tests, 99 % line and branch coverage (the rest is the `python -m` module, which only runs in a subprocess).
+95 tests, 99 % line and branch coverage (the rest is the `python -m` module, which only runs in a subprocess).
 The end-to-end tests run the real `httpx` and OpenAI SDK clients against local servers, with real services
 blocked behind a dead proxy. **No live NewsAPI or OpenAI call has been made with this code**: no keys were
 used, only demo values.

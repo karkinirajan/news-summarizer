@@ -34,9 +34,9 @@ Reading `summarizer.py` against the OpenAI SDK, it **could not have worked**:
 | `src/news_summarizer/config.py` | settings from the environment; missing or invalid values are reported by name; the two keys are excluded from `repr` |
 | `src/news_summarizer/news.py` | NewsAPI client: key in the `X-Api-Key` header, topic passed as a parameter, timeout, tolerant parsing, `[Removed]` articles dropped, NewsAPI's `[+N chars]` marker removed, errors that never contain the key or the URL |
 | `src/news_summarizer/summarizer.py` | one request per article on the **Responses API** (`responses.create`); a failure on one article is recorded and the rest continue; a rejected key stops the run after one request |
-| `src/news_summarizer/pipeline.py`, `cli.py`, `__main__.py` | `summarize_topic`, and the `news-summarizer` command (text or `--json`, exit codes 0/1/2/3, terminal escape sequences removed from printed text) |
+| `src/news_summarizer/pipeline.py`, `cli.py`, `__main__.py` | `summarize_topic`, and the `news-summarizer` command (text or `--json`, exit codes 0/1/2/3, control, format and bidi characters removed from printed text, escaped in JSON) |
 | `pyproject.toml`, `uv.lock`, `.python-version` | uv project on Python 3.13; 3 direct dependencies (`openai`, `httpx`, `python-dotenv`) instead of 18 pins |
-| `tests/` | 88 tests (below) |
+| `tests/` | 95 tests (below) |
 | `.env.example`, `.gitignore` | demo values for every variable (a test keeps the file complete); `.env.*` and `.ruff_cache` ignored |
 | `.github/workflows/ci.yml` | lint, format check, tests |
 | `README.md`, `VERSIONS.md`, `work-done.md` | written |
@@ -51,12 +51,22 @@ and removes the polling loop; the cost is that the model no longer chooses what 
 
 | Check | Result |
 |---|---|
-| `uv run pytest -q --cov` | 88 passed; coverage 99 % (283 statements, 60 branches; the 3 missed lines are `__main__.py`, run only in a subprocess) |
+| `uv run pytest -q --cov` | 95 passed; coverage 99 % (283 statements, 60 branches; the 3 missed lines are `__main__.py`, run only in a subprocess) |
 | `ruff check .`, `ruff format --check .` | pass, with rules `E F I B UP SIM S BLE RUF` |
-| mutation check | 27 defects reintroduced one at a time (key in the URL, `[Removed]` kept, key not scrubbed, no fatal stop on a bad key, control characters not stripped, wrong exit codes, ...): the suite failed for all 27; sources restored afterwards. A 28th check (an undocumented variable) confirmed the `.env.example` test |
+| mutation check | 30 defects reintroduced one at a time (key in the URL, `[Removed]` kept, key not scrubbed, no fatal stop on a bad key, control characters not stripped, wrong exit codes, ...): the suite failed for all 30; sources restored afterwards. A 28th check (an undocumented variable) confirmed the `.env.example` test |
 | end-to-end tests | real `httpx` and OpenAI SDK clients against local fake NewsAPI and OpenAI servers, real services blocked by a dead proxy |
 | the installed `news-summarizer` command, as a separate process | text and `--json` output, a refused article (exit 1), a bad `-n` (exit 2) |
 | secret scan of all 3 commits and of the tree being committed | nothing found (count-only scan: OpenAI-style keys, private keys, URLs with passwords, key-like literals, 32-hex strings) |
+
+## Follow-up: automated security review
+
+A review of the first commit found the terminal sanitizer too narrow: it dropped only characters below U+0020, so
+C1 controls (U+0080 to U+009F, which some terminals treat as escape introducers), bidi overrides and the invisible
+"tag" characters used to hide text got through. Also, error text from NewsAPI reached stderr uncleaned, and
+`--json` (written with `ensure_ascii=False`) printed those characters raw. All three are fixed in the second commit:
+the sanitizer now drops every character whose Unicode category starts with `C`, the JSON output escapes them (it
+still round-trips to the original text), and error messages are cleaned. Three more reintroduced defects confirm it.
+Dropping category `Cf` also removes the zero width joiner, so some multi-part emoji print as separate emoji.
 
 ## Not verified
 

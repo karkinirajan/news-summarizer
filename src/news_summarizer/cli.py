@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import sys
+import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from typing import TextIO
 
@@ -52,10 +53,35 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _is_control(ch: str) -> bool:
+    """Unicode category C*: C0 and C1 controls, bidi and other format characters (also the invisible
+    "tag" characters), private use, unassigned. A byte check (< 0x20) misses most of them."""
+    return unicodedata.category(ch).startswith("C")
+
+
 def clean(text: str) -> str:
-    """Article titles and model output are untrusted: drop control characters (ANSI escapes) before
-    they reach a terminal. Newlines stay."""
-    return "".join(ch for ch in text if ch == "\n" or (ch >= " " and ch != "\x7f"))
+    """Article titles, model output and remote error messages are untrusted: drop everything
+    that can drive a terminal or hide text (escape sequences, C1 controls, bidi overrides).
+    Newlines stay."""
+    return "".join(ch for ch in text if ch == "\n" or not _is_control(ch))
+
+
+def _escape_controls(json_text: str) -> str:
+    """JSON escapes characters below 0x20 itself but, with ensure_ascii=False, writes C1, bidi and
+    tag characters raw. Turn those into \\uXXXX escapes: still the same JSON, safe to show in a
+    terminal. The newlines of the indentation are structure and stay."""
+    out: list[str] = []
+    for ch in json_text:
+        if ch != "\n" and _is_control(ch):
+            code = ord(ch)
+            if code > 0xFFFF:  # JSON spells these as a surrogate pair
+                code -= 0x10000
+                out.append(f"\\u{0xD800 + (code >> 10):04x}\\u{0xDC00 + (code & 0x3FF):04x}")
+            else:
+                out.append(f"\\u{code:04x}")
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 def render_text(results: Sequence[ArticleSummary]) -> str:
@@ -73,19 +99,21 @@ def render_text(results: Sequence[ArticleSummary]) -> str:
 
 
 def render_json(results: Sequence[ArticleSummary]) -> str:
-    return json.dumps(
-        [
-            {
-                "title": item.article.title,
-                "source": item.article.source,
-                "url": item.article.url,
-                "summary": item.summary,
-                "error": item.error,
-            }
-            for item in results
-        ],
-        ensure_ascii=False,
-        indent=2,
+    return _escape_controls(
+        json.dumps(
+            [
+                {
+                    "title": item.article.title,
+                    "source": item.article.source,
+                    "url": item.article.url,
+                    "summary": item.summary,
+                    "error": item.error,
+                }
+                for item in results
+            ],
+            ensure_ascii=False,
+            indent=2,
+        )
     )
 
 
@@ -112,7 +140,7 @@ def main(
     try:
         settings = Settings.from_env(environ)
     except ConfigError as exc:
-        print(f"error: {exc}. See .env.example.", file=err)
+        print(f"error: {clean(str(exc))}. See .env.example.", file=err)
         return EXIT_USAGE
 
     overrides: dict[str, object] = {}
@@ -127,7 +155,7 @@ def main(
     try:
         results = run(args.topic, settings)
     except (NewsError, FatalSummaryError) as exc:
-        print(f"error: {exc}", file=err)
+        print(f"error: {clean(str(exc))}", file=err)
         return EXIT_SERVICE
 
     if args.json:

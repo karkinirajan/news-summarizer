@@ -1,5 +1,6 @@
 import io
 import json
+import unicodedata
 
 import pytest
 
@@ -194,3 +195,42 @@ def test_help_lists_the_options():
     assert done.returncode == 0
     for option in ("--limit", "--language", "--model", "--json"):
         assert option in done.stdout
+
+
+# What a hostile headline can carry: a C1 control (CSI, 0x9b), a bidi override, an invisible "tag"
+# character, a zero width space and a plain escape sequence. None of them may reach a terminal.
+HOSTILE = "ok\x9b31m‮evil\U000e0041​fine\x1b[2J"
+
+
+def test_clean_removes_c1_bidi_tag_and_zero_width_characters():
+    assert clean(HOSTILE) == "ok31mevilfine[2J"
+
+
+def test_clean_keeps_ordinary_text_in_any_script():
+    assert clean("Café 中文 العربية 😀\nsecond line") == "Café 中文 العربية 😀\nsecond line"
+
+
+def test_text_output_is_free_of_control_characters():
+    out = render_text([ArticleSummary(art(1, title=HOSTILE, source=HOSTILE), HOSTILE)])
+    assert not any(unicodedata.category(c).startswith("C") and c != "\n" for c in out)
+
+
+def test_json_output_has_no_raw_control_characters_and_still_round_trips():
+    out = render_json([ArticleSummary(art(1, title=HOSTILE), HOSTILE)])
+    assert not any(unicodedata.category(c).startswith("C") and c != "\n" for c in out)
+    data = json.loads(out)
+    assert data[0]["title"] == HOSTILE and data[0]["summary"] == HOSTILE
+
+
+def test_json_output_keeps_readable_non_ascii_text():
+    out = render_json([ArticleSummary(art(1, title="Café 中文 😀"), "s")])
+    assert "Café 中文 😀" in out
+
+
+@pytest.mark.parametrize(
+    "error", [NewsError(f"NewsAPI answered HTTP 401: {HOSTILE}"), FatalSummaryError(HOSTILE)]
+)
+def test_error_text_from_a_remote_service_is_cleaned_before_it_reaches_stderr(error):
+    _, _, err, _ = run_cli(["x"], error=error)
+    assert not any(unicodedata.category(c).startswith("C") and c != "\n" for c in err)
+    assert "ok31mevilfine" in err
